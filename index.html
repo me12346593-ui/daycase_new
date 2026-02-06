@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>SOP 指挥官雷达 (Hybrid Core)</title>
+  <script src="https://cdn.jsdelivr.net/npm/lunar-javascript@1.2.37/lunar.js"></script>
+  <style>
+    :root {
+      --bg: #000; --card: #1c1c1e; --text: #e5e5e5;
+      --gold: #d4a017; --red: #ff453a; --green: #32d74b; --purple: #bf5af2;
+    }
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;margin:0;padding:16px;background:var(--bg);color:var(--text);line-height:1.5}
+    .card{background:var(--card);border:1px solid #333;border-radius:12px;padding:16px;margin-bottom:16px;box-shadow:0 4px 20px rgba(0,0,0,0.4)}
+    
+    /* 顶部仪表盘 */
+    .hero { border: 1px solid var(--gold); background: linear-gradient(160deg, #1c1c1e 60%, #2c2a20 100%); }
+    .hero-title { color:var(--gold); font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:12px; opacity:0.8; font-weight:bold;}
+    
+    .grid-row { display: grid; grid-template-columns: 1fr; gap: 8px; }
+    .grid-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #333; }
+    .grid-item:last-child { border-bottom: none; }
+    .cat-label { font-size: 13px; color: #888; }
+    .cat-val { font-size: 15px; font-weight: bold; color: #fff; }
+    .cat-score { font-family: monospace; font-weight: 800; margin-left: 6px; }
+    
+    /* 控制区 */
+    .row{display:flex;gap:10px;align-items:center}
+    input,select{background:#000;color:#fff;border:1px solid #444;padding:12px;border-radius:8px;font-size:15px;flex:1;outline:none;-webkit-appearance:none;}
+    button{background:var(--gold);color:#000;border:none;font-weight:bold;padding:12px 20px;border-radius:8px;font-size:15px}
+    
+    /* 详情区 */
+    .badge{display:inline-block;padding:2px 6px;border-radius:4px;font-size:12px;font-weight:bold;margin-right:6px;vertical-align:text-bottom;}
+    .good{background:rgba(50,215,75,0.15);color:var(--green);border:1px solid rgba(50,215,75,0.3)}
+    .bad{background:rgba(255,69,58,0.15);color:var(--red);border:1px solid rgba(255,69,58,0.3)}
+    .mid{background:rgba(255,255,255,0.1);color:#aaa;border:1px solid #444}
+    .void{background:rgba(191,90,242,0.15);color:var(--purple);border:1px solid rgba(191,90,242,0.3)}
+    
+    .log-item{font-size:13px; margin-bottom:8px; padding:10px; background:#252527; border-radius:8px; color:#ccc;}
+    .log-title { font-weight: bold; color: #fff; display: block; margin-bottom: 4px; font-size: 14px;}
+    .log-desc { color: #999; line-height: 1.4; }
+    .warn-text {color: var(--gold);}
+  </style>
+</head>
+<body>
+
+<div class="card hero">
+  <div class="hero-title">今日战术情报 (Daily Intel)</div>
+  <div id="heroContent" class="grid-row">
+    <div style="text-align:center; padding:10px; color:#666">正在连接卫星数据...</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="row">
+    <input id="d" type="date" onchange="autoRun()" />
+    <button onclick="setToday()">今日</button>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <select id="mode" onchange="runAnalysis()">
+      <optgroup label="A. 资本与扩张">
+        <option value="A1">A1 股权/大额投资</option>
+        <option value="A2">A2 现金流/收账</option>
+        <option value="A3">A3 实体店扩张/SOP</option>
+        <option value="A4">A4 签约/法务</option>
+      </optgroup>
+      <optgroup label="B. 关系与博弈">
+        <option value="B1">B1 亲密关系 (Iris)</option>
+        <option value="B2">B2 商务谈判/博弈</option>
+        <option value="B3">B3 员工/管理</option>
+        <option value="B4">B4 社交/公关</option>
+      </optgroup>
+      <optgroup label="C. 身体与能量">
+        <option value="C1">C1 30km骑行/高能</option>
+        <option value="C2">C2 医疗/手术</option>
+        <option value="C3">C3 炎症/睡眠/内耗</option>
+        <option value="C4">C4 风水/能量场</option>
+      </optgroup>
+    </select>
+  </div>
+</div>
+
+<div id="resultArea"></div>
+
+<script>
+// ==========================================
+// 1. 基础数据库 (High Precision Core)
+// ==========================================
+const NATAL = {
+  year: { tg:"壬", dz:"戌" },
+  month: { tg:"庚", dz:"戌" },
+  day:   { tg:"己", dz:"丑" }, // 核心
+  hour:  { tg:"庚", dz:"午" }
+};
+
+// 解释库 (Intelligence Dictionary)
+const REL_DICT = {
+  '冲': {
+    'A': '⚠️ **动荡/变数**：合同有漏洞，资金卡顿。忌不可撤销的决定。',
+    'B': '⚡️ **冲突/对立**：情绪上头，容易话赶话。适合冷处理。',
+    'C': '🚑 **冲击/意外**：骑行注意路况，关节易受伤。禁止极限挑战。'
+  },
+  '刑': {
+    'A': '🔒 **纠结/内耗**：表面没事，内部流程卡死。SOP执行不顺。',
+    'B': '🔪 **挑剔/折磨**：互相看着不顺眼，翻旧账。心里有火发不出。',
+    'C': '🔥 **炎症/焦虑**：精神内耗严重，失眠，旧伤隐痛。'
+  },
+  '害': {
+    'A': '❌ **小人/暗耗**：设备莫名损坏，或被隐性条款坑。',
+    'B': '❄️ **误解/隔阂**：沟通无效，越描越黑。不要强行解释。',
+    'C': '🦠 **虚弱/病符**：免疫力下降，莫名疲惫，易感冒。'
+  },
+  '合': {
+    'A': '🤝 **稳定/羁绊**：利于签约，但也可能资金被锁住（流动性差）。',
+    'B': '❤️ **融洽/粘人**：适合修复关系，对方比较听话。',
+    'C': '🛌 **慵懒/恢复**：不想动，只想躺着。适合休息，不适合破PB。'
+  },
+  '伏吟': '🔁 **重复/停滞**：事情反反复复，像鬼打墙。建议原地待命，整理内务。',
+  '反吟': '💥 **反转/冲击**：事情突然变卦。必须准备Plan B。',
+  '火毒': '⛔️ **火毒攻心**：太岁丙午叠加夏火。禁止熬夜，禁止燥热食物。',
+  '空亡': '⭕️ **能量中空**：承诺不兑现，做多错多。只适合思考，不适合落地。'
+};
+
+// 你的偏好配置 (Use God)
+const PREF = {
+  like: ["金", "火"], 
+  ok:   ["土"],
+  wary: ["木", "水"]
+};
+
+// 浮点数权重矩阵 (Precision Matrix from Index.html)
+const MODE = {
+  'A1': { wx: {金:1.25, 火:0.85, 土:0.55, 木:-1.05, 水:-0.55}, rel: {冲:-2.0, 刑:-1.5, 害:-1.0, 合:+0.7}, extra: {fanyin:-2.5, fuyin:-1.2} },
+  'A2': { wx: {金:1.10, 火:0.70, 土:0.45, 木:-0.85, 水:+0.20}, rel: {冲:-1.6, 刑:-1.2, 害:-0.9, 合:+0.7}, extra: {fanyin:-2.0, fuyin:-1.0} },
+  'A3': { wx: {金:1.20, 火:0.95, 土:0.75, 木:-0.95, 水:-0.45}, rel: {冲:-1.6, 刑:-1.3, 害:-0.8, 合:+0.6}, extra: {fanyin:-1.9, fuyin:-0.9} },
+  'A4': { wx: {金:1.05, 火:0.95, 土:0.45, 木:-0.70, 水:-0.20}, rel: {冲:-2.2, 刑:-1.8, 害:-1.2, 合:+1.0}, extra: {fanyin:-2.5, fuyin:-1.0} },
+  'B1': { wx: {金:0.85, 火:0.55, 土:0.35, 木:-1.10, 水:+0.15}, rel: {冲:-1.8, 刑:-1.4, 害:-1.1, 合:+1.2}, extra: {fanyin:-2.2, fuyin:-1.2} },
+  'B2': { wx: {金:1.30, 火:0.65, 土:0.45, 木:-1.05, 水:-0.10}, rel: {冲:-1.5, 刑:-1.2, 害:-1.0, 合:+0.8}, extra: {fanyin:-2.0, fuyin:-1.0} },
+  'B3': { wx: {金:1.00, 火:0.60, 土:0.55, 木:-0.85, 水:-0.10}, rel: {冲:-1.6, 刑:-1.4, 害:-1.3, 合:+0.7}, extra: {fanyin:-1.9, fuyin:-1.0} },
+  'B4': { wx: {金:1.05, 火:0.85, 土:0.25, 木:-0.70, 水:+0.25}, rel: {冲:-1.2, 刑:-1.0, 害:-0.9, 合:+0.8}, extra: {fanyin:-1.6, fuyin:-0.8} },
+  'C1': { wx: {金:0.55, 火:0.40, 土:0.25, 木:-0.70, 水:-0.35}, rel: {冲:-2.5, 刑:-2.0, 害:-1.2, 合:+0.4}, extra: {fanyin:-3.0, fuyin:-1.5} },
+  'C2': { wx: {金:0.45, 火:0.30, 土:0.20, 木:-0.65, 水:-0.25}, rel: {冲:-2.5, 刑:-2.5, 害:-1.5, 合:+0.3}, extra: {fanyin:-3.0, fuyin:-2.0} },
+  'C3': { wx: {金:0.60, 火:-2.0, 土:-0.5, 木:-0.55, 水:+0.80}, rel: {冲:-1.5, 刑:-1.5, 害:-1.2, 合:+0.5}, extra: {fanyin:-2.2, fuyin:-1.5} },
+  'C4': { wx: {金:0.60, 火:0.30, 土:0.20, 木:-0.55, 水:-0.25}, rel: {冲:-1.8, 刑:-1.5, 害:-1.1, 合:+0.4}, extra: {fanyin:-2.2, fuyin:-1.3} }
+};
+
+const TG_WX = {甲:"木",乙:"木",丙:"火",丁:"火",戊:"土",己:"土",庚:"金",辛:"金",壬:"水",癸:"水"};
+const DZ_WX = {子:"水",丑:"土",寅:"木",卯:"木",辰:"土",巳:"火",午:"火",未:"土",申:"金",酉:"金",戌:"土",亥:"水"};
+const CHONG = new Set(["子午","午子","丑未","未丑","寅申","申寅","卯酉","酉卯","辰戌","戌辰","巳亥","亥巳"]);
+const XING = new Set(["子卯","卯子","寅巳","巳申","申寅","丑戌","戌未","未丑","辰辰","午午","酉酉","亥亥"]);
+const HAI = new Set(["子未","未子","丑午","午丑","寅巳","巳寅","卯辰","辰卯","申亥","亥申","酉戌","戌酉"]);
+const HE_LIU = new Set(["子丑","丑子","寅亥","亥寅","卯戌","戌卯","辰酉","酉辰","巳申","申巳","午未","未午"]);
+const KONG_WANG = ['午', '未'];
+
+// ==========================================
+// 2. 核心计算引擎 (Engine)
+// ==========================================
+
+function getWxScore(wx, modeKey) {
+  let score = MODE[modeKey].wx[wx] || 0;
+  if (PREF.like.includes(wx)) score += 0.5;
+  if (PREF.wary.includes(wx)) score -= 0.3;
+  return score;
+}
+
+function getExplanation(type, modeKey) {
+  const cat = modeKey.charAt(0); // 'A', 'B', 'C'
+  if (REL_DICT[type]) {
+    if (typeof REL_DICT[type] === 'string') return REL_DICT[type]; // 通用解释
+    return REL_DICT[type][cat] || REL_DICT[type]['A'];
+  }
+  return '';
+}
+
+function checkRelations(flowDz, modeKey) {
+  let score = 0;
+  let logs = [];
+  const myDz = [NATAL.year.dz, NATAL.month.dz, NATAL.day.dz, NATAL.hour.dz];
+  const rw = MODE[modeKey].rel;
+  const pName = ['年','月','日','时'];
+
+  myDz.forEach((nz, idx) => {
+    const pair = flowDz + nz;
+    let type = '';
+    let s = 0;
+    
+    if (CHONG.has(pair)) { type='冲'; s=rw.冲; }
+    else if (XING.has(pair)) { type='刑'; s=rw.刑; }
+    else if (HAI.has(pair)) { type='害'; s=rw.害; }
+    else if (HE_LIU.has(pair)) { type='合'; s=rw.合; }
+    
+    if (type) {
+      score += s;
+      logs.push({
+        t: type, 
+        title: `${flowDz} (流日) - ${nz} (本命${pName[idx]}) ${type}`,
+        desc: getExplanation(type, modeKey),
+        s: s
+      });
+    }
+    
+    if (flowDz === nz) {
+      score += MODE[modeKey].extra.fuyin;
+      logs.push({
+        t: '伏吟', 
+        title: `${flowDz} (流日) 伏吟 本命${pName[idx]}`,
+        desc: getExplanation('伏吟', modeKey),
+        s: MODE[modeKey].extra.fuyin
+      });
+    }
+  });
+  
+  return {score, logs};
+}
+
+function analyze(dateStr, modeKey) {
+  const d = new Date(dateStr);
+  const solar = Solar.fromYmd(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  const lunar = solar.getLunar();
+  const bazi = lunar.getEightChar();
+  
+  const yearGZ = bazi.getYear();
+  const monthGZ = bazi.getMonth();
+  const dayGZ = bazi.getDay();
+  const dGan = dayGZ[0];
+  const dZhi = dayGZ[1];
+  const mZhi = monthGZ[1]; 
+  
+  let totalScore = 0;
+  let details = [];
+  let isVoid = false;
+
+  // A. 五行得分
+  const tgScore = getWxScore(TG_WX[dGan], modeKey) * 1.0; 
+  const dzScore = getWxScore(DZ_WX[dZhi], modeKey) * 0.8; 
+  totalScore += (tgScore + dzScore);
+  
+  // B. 关系得分
+  const relRes = checkRelations(dZhi, modeKey);
+  totalScore += relRes.score;
+  details = relRes.logs;
+  // --- 仲裁逻辑 (SOP Arbitrator) ---
+  // 解决“既合又冲”的矛盾显示
+  const hasChong = details.some(x => x.t === '冲');
+  const hasHe = details.some(x => x.t === '合');
+  
+  if (hasChong && hasHe) {
+    // 1. 先把原来矛盾的单条解释标记为“折叠”或直接删除，这里我们选择清空并重写
+    // 但为了保留具体冲了谁的信息，我们只保留title，重写desc
+    
+    // 2. 生成综合建议
+    let synthesis = '';
+    if (modeKey.startsWith('B')) { // 关系类特化
+      synthesis = '⚠️ **爱恨交织 (Complex)**：今日能量极其拉扯。日支受合（想亲近），时支受冲（易吵架）。\n👉 **SOP**：只谈情（享受合），不谈事（避免冲）。一旦感觉气氛不对，立刻物理撤退，不要试图“把话讲清楚”。';
+    } else if (modeKey.startsWith('A')) { // 财务类特化
+      synthesis = '⚠️ **先成后败 (Volatile)**：表面谈得好（合），落地全是坑（冲）。\n👉 **SOP**：可以签意向书，但不要付全款。';
+    } else {
+      synthesis = '⚠️ **震荡模式**：吉凶同显，过程舒服，结果折腾。';
+    }
+
+    // 3. 暴力插入一条最高优先级的“参谋建议”
+    details.unshift({
+      t: '纠缠',
+      title: '⚡️ 冲合并见 (Conflict & Harmony)',
+      desc: synthesis,
+      s: -5 // 这种日子通常消耗极大，给个负分警示
+    });
+    
+    // 4. (可选) 如果你想把原来那两条矛盾的删掉，可以过滤一下，或者就留着当底层数据
+    // details = details.filter(d => d.t !== '冲' && d.t !== '合'); // 这一行看你喜好，我建议保留但把新建议置顶
+  }
+
+
+  // C. 2026 特供补丁
+  // 夏火熔金
+  if (yearGZ.includes('丙午') && ['巳','午','未'].includes(mZhi)) {
+    if (MODE[modeKey].wx['金'] > 0.8) {
+      totalScore -= 3.0;
+      details.unshift({t:'火毒', title:'夏火熔金', desc: getExplanation('火毒', modeKey), s:-3.0});
+    }
+    if (modeKey === 'C3') {
+      totalScore -= 5.0;
+      details.unshift({t:'高危', title:'火毒攻心', desc:'⛔️ 极热模式：必须强制休息，物理降温。', s:-5.0});
+    }
+  }
+
+  // 空亡
+  if (KONG_WANG.includes(dZhi)) {
+    isVoid = true;
+    if (modeKey.startsWith('A')) {
+      totalScore = -10; 
+      details.unshift({t:'空亡', title:'空亡日 (午/未)', desc: getExplanation('空亡', modeKey), s:-99});
+    } else {
+      totalScore *= 0.5; 
+      details.unshift({t:'空亡', title:'空亡日', desc: '⚠️ 能量减半，事倍功半。', s:0});
+    }
+  }
+
+  let grade = '中平';
+  let css = 'mid';
+  if (totalScore >= 3.5) { grade = '优 (A-Tier)'; css = 'good'; }
+  else if (totalScore >= 1.0) { grade = '良 (B-Tier)'; css = 'mid'; }
+  else if (totalScore <= -3.0) { grade = '凶 (Risk)'; css = 'bad'; }
+  if (isVoid && modeKey.startsWith('A')) { grade = '熔断 (VOID)'; css = 'void'; }
+
+  return {
+    score: totalScore.toFixed(1),
+    grade, css, details,
+    gz: `${yearGZ}年 ${monthGZ}月 ${dayGZ}日`
+  };
+}
+
+// ==========================================
+// 3. UI Logic (Dashboard)
+// ==========================================
+
+function autoRun() {
+  const dVal = document.getElementById("d").value;
+  if (!dVal || typeof Solar === 'undefined') return;
+  
+  // 1. 分类计算最高分
+  let bestA = {s:-999, n:'', k:''}, bestB = {s:-999, n:'', k:''}, bestC = {s:-999, n:'', k:''};
+  
+  const options = document.querySelectorAll('#mode option');
+  options.forEach(opt => {
+    const key = opt.value;
+    const name = opt.text.split(' ')[1]; // 取出 "股权/大额投资"
+    const res = analyze(dVal, key);
+    const s = parseFloat(res.score);
+    
+    if (key.startsWith('A') && s > bestA.s) bestA = {s:s, n:name, k:key};
+    if (key.startsWith('B') && s > bestB.s) bestB = {s:s, n:name, k:key};
+    if (key.startsWith('C') && s > bestC.s) bestC = {s:s, n:name, k:key};
+  });
+
+  // 2. 渲染顶部 Grid
+  const getCol = (s) => s > 3 ? '#32d74b' : (s < 0 ? '#ff453a' : '#d4a017');
+  
+  const html = `
+    <div class="grid-item">
+      <span class="cat-label">💰 A. 资本</span>
+      <div><span class="cat-val">${bestA.n}</span> <span class="cat-score" style="color:${getCol(bestA.s)}">${bestA.s}</span></div>
+    </div>
+    <div class="grid-item">
+      <span class="cat-label">🤝 B. 关系</span>
+      <div><span class="cat-val">${bestB.n}</span> <span class="cat-score" style="color:${getCol(bestB.s)}">${bestB.s}</span></div>
+    </div>
+    <div class="grid-item">
+      <span class="cat-label">🧘 C. 身体</span>
+      <div><span class="cat-val">${bestC.n}</span> <span class="cat-score" style="color:${getCol(bestC.s)}">${bestC.s}</span></div>
+    </div>
+  `;
+  document.getElementById('heroContent').innerHTML = html;
+  
+  runAnalysis(); 
+}
+
+function runAnalysis() {
+  const dVal = document.getElementById("d").value;
+  const modeKey = document.getElementById("mode").value;
+  if (!dVal) return;
+  
+  const res = analyze(dVal, modeKey);
+  const modeName = document.getElementById("mode").selectedOptions[0].text;
+  
+  let html = `
+    <div class="card" style="border-left:4px solid ${getColor(res.css)}">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <span style="font-family:monospace;font-size:16px;color:#aaa">${res.gz}</span>
+        <span class="badge ${res.css}" style="font-size:14px">${res.grade} ${res.score}</span>
+      </div>
+      <div style="margin-top:8px;font-size:14px;color:#888">当前模式: <span style="color:#fff">${modeName}</span></div>
+      
+      <div style="margin-top:16px;border-top:1px solid #333;padding-top:12px">
+        <div style="font-size:12px;color:#666;text-transform:uppercase;margin-bottom:8px">战术情报解码 (Intel)</div>
+  `;
+  
+  if (res.details.length === 0) {
+    html += `<div class="log-item">✅ 能量场纯净，无明显冲刑干扰，SOP 正常执行。</div>`;
+  } else {
+    res.details.forEach(log => {
+      const color = log.s < 0 ? '#ff453a' : '#32d74b';
+      const tagColor = log.s < 0 ? 'rgba(255,69,58,0.2)' : 'rgba(50,215,75,0.2)';
+      
+      html += `
+      <div class="log-item" style="border-left:3px solid ${color}">
+        <span class="log-title">
+          <span style="background:${tagColor};color:${color};padding:2px 4px;border-radius:3px;font-size:11px;margin-right:4px">[${log.t}]</span>
+          ${log.title}
+        </span>
+        <div class="log-desc">${log.desc}</div>
+      </div>`;
+    });
+  }
+  
+  html += `</div></div>`;
+  document.getElementById('resultArea').innerHTML = html;
+}
+
+function getColor(c) {
+  if (c==='good') return '#32d74b';
+  if (c==='bad') return '#ff453a';
+  if (c==='void') return '#bf5af2';
+  return '#d4a017';
+}
+
+function setToday() {
+  const dt = new Date();
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth()+1).padStart(2,'0');
+  const day = String(dt.getDate()).padStart(2,'0');
+  document.getElementById('d').value = `${y}-${m}-${day}`;
+  autoRun();
+}
+
+window.onload = () => {
+  setToday();
+  setTimeout(autoRun, 500); 
+};
+</script>
+</body>
+</html>
